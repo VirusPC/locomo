@@ -8,8 +8,12 @@ import os, json
 from tqdm import tqdm
 import time
 from global_methods import run_chatgpt
-from task_eval.rag_utils import get_embeddings
-import tiktoken
+from task_eval.openai_compat import (
+    context_length_for_model,
+    encoding_for_eval_model,
+    qa_max_tokens,
+    qa_temperature,
+)
 import numpy as np
 
 MAX_LENGTH={'gpt-4-turbo': 128000,
@@ -19,7 +23,11 @@ MAX_LENGTH={'gpt-4-turbo': 128000,
             'gpt-3.5-turbo-8k': 8000,
             'gpt-3.5-turbo-4k': 4000,
             'gpt-3.5-turbo': 4096,
-            'gpt-4-32k': 320000}
+            'gpt-4-32k': 320000,
+            'kimi-for-coding': 128000,
+            'kimi-for-coding-highspeed': 128000,
+            'k3': 128000,
+            'k3-256k': 128000}
 PER_QA_TOKEN_BUDGET = 50
 
 QA_PROMPT = """
@@ -65,6 +73,8 @@ def process_ouput(text):
 
 
 def prepare_for_rag(args, data):
+
+    from task_eval.rag_utils import get_embeddings
 
     dataset_prefix = os.path.splitext(os.path.split(args.data_file)[-1])[0]
 
@@ -186,7 +196,7 @@ def get_input_context(data, num_question_tokens, encoding, args):
                 turn += '\n'
         
                 num_tokens = len(encoding.encode('DATE: ' + data['session_%s_date_time' % i] + '\n' + 'CONVERSATION:\n' + turn))
-                if (num_tokens + len(encoding.encode(query_conv)) + num_question_tokens) < (MAX_LENGTH[args.model]-(PER_QA_TOKEN_BUDGET*(args.batch_size))): # 20 tokens assigned for answers
+                if (num_tokens + len(encoding.encode(query_conv)) + num_question_tokens) < (context_length_for_model(args.model, MAX_LENGTH)-(PER_QA_TOKEN_BUDGET*(args.batch_size))): # 20 tokens assigned for answers
                     query_conv = turn + query_conv
                 else:
                     min_session = i
@@ -207,7 +217,7 @@ def get_input_context(data, num_question_tokens, encoding, args):
 def get_gpt_answers(in_data, out_data, prediction_key, args):
 
 
-    encoding = tiktoken.encoding_for_model('gpt-3.5-turbo-16k' if any([k in args.model for k in ['16k', '12k', '8k', '4k']]) else args.model)
+    encoding = encoding_for_eval_model(args.model)
     assert len(in_data['qa']) == len(out_data['qa']), (len(in_data['qa']), len(out_data['qa']))
 
     # start instruction prompt
@@ -283,10 +293,13 @@ def get_gpt_answers(in_data, out_data, prediction_key, args):
         if args.batch_size == 1:
 
             query = query_conv + '\n\n' + QA_PROMPT.format(questions[0]) if len(cat_5_idxs) == 0 else query_conv + '\n\n' + QA_PROMPT_CAT_5.format(questions[0])
-            answer = run_chatgpt(query, num_gen=1, num_tokens_request=32, 
+            answer = run_chatgpt(query, num_gen=1, num_tokens_request=qa_max_tokens(
+                        args.model, args.batch_size, batched=False,
+                        override=getattr(args, 'max_tokens', None),
+                        per_qa_token_budget=PER_QA_TOKEN_BUDGET),
                     model='chatgpt' if 'gpt-3.5' in args.model else args.model, 
                     use_16k=True if any([k in args.model for k in ['16k', '12k', '8k', '4k']]) else False, 
-                    temperature=0, wait_time=2)
+                    temperature=qa_temperature(args.model, getattr(args, 'temperature', None)), wait_time=2)
             
             if len(cat_5_idxs) > 0:
                 answer = get_cat_5_answer(answer, cat_5_answers[0])
@@ -306,10 +319,13 @@ def get_gpt_answers(in_data, out_data, prediction_key, args):
                     print("Trial %s/3" % trials)
                     # print("Sending query of %s tokens" % len(encoding.encode(query)))
                     # print("Trying with answer token budget = %s per question" % PER_QA_TOKEN_BUDGET)
-                    answer = run_chatgpt(query, num_gen=1, num_tokens_request=args.batch_size*PER_QA_TOKEN_BUDGET, 
+                    answer = run_chatgpt(query, num_gen=1, num_tokens_request=qa_max_tokens(
+                                args.model, args.batch_size, batched=True,
+                                override=getattr(args, 'max_tokens', None),
+                                per_qa_token_budget=PER_QA_TOKEN_BUDGET),
                             model='chatgpt' if 'gpt-3.5' in args.model else args.model, 
                             use_16k=True if any([k in args.model for k in ['16k', '12k', '8k', '4k']]) else False, 
-                            temperature=0, wait_time=2)
+                            temperature=qa_temperature(args.model, getattr(args, 'temperature', None)), wait_time=2)
                     answer = answer.replace('\\"', "'").replace('json','').replace('`','').strip().replace("\\'", "")
                     answers = process_ouput(answer.strip())
                     break

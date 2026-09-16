@@ -1,0 +1,9 @@
+# Minimal extras for official evaluate_qa.py with OpenAI-compatible models.
+# The root requirements.txt remains the upstream conda export.
+openai==0.28.0
+tiktoken>=0.5.2
+tqdm
+numpy
+regex
+nltk
+bert-score

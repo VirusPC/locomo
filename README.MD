@@ -57,6 +57,12 @@ See `scripts/generate_conversations.py` for details on the various parameters th
 bash scripts/evaluate_gpts.sh
 ```
 
+* Evaluate OpenAI-compatible models such as `kimi-for-coding` (VirusPC fork; Edges smoke, not a benchmark claim). See `docs/EDGES_EVAL.md`.
+```
+export KIMI_API_KEY=...
+bash scripts/evaluate_kimi_smoke.sh
+```
+
 * Evaluate Anthropic models
 ```
 bash scripts/evaluate_claude.sh
