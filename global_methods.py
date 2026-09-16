@@ -4,9 +4,10 @@ import json
 import time
 import sys
 import os
+from pathlib import Path
 
-import google.generativeai as genai
-from anthropic import Anthropic
+sys.path.insert(0, str(Path(__file__).parent))
+from task_eval.openai_compat import message_text, resolve_openai_credentials
 
 
 def get_openai_embedding(texts, model="text-embedding-ada-002"):
@@ -19,10 +20,14 @@ def set_anthropic_key():
 def set_gemini_key():
 
     # Or use `os.getenv('GOOGLE_API_KEY')` to fetch an environment variable.
+    import google.generativeai as genai
     genai.configure(api_key=os.environ['GOOGLE_API_KEY'])
 
-def set_openai_key():
-    openai.api_key = os.environ['OPENAI_API_KEY']
+def set_openai_key(model=None):
+    api_key, api_base = resolve_openai_credentials(model)
+    openai.api_key = api_key
+    if api_base:
+        openai.api_base = api_base
 
 
 def run_json_trials(query, num_gen=1, num_tokens_request=1000, 
@@ -60,6 +65,7 @@ def run_claude(query, max_new_tokens, model_name):
     elif model_name == 'claude-haiku':
         model_name = "claude-3-haiku-20240307"
 
+    from anthropic import Anthropic
     client = Anthropic(
     # This is the default and can be omitted
     api_key=os.environ.get("ANTHROPIC_API_KEY"),
@@ -127,8 +133,29 @@ def run_chatgpt(query, num_gen=1, num_tokens_request=1000,
                     ]
                 )
             else:
-                print("Did not find model %s" % model)
-                raise ValueError
+                # OpenAI-compatible Chat Completions (kimi-for-coding, etc.)
+                create_kwargs = {
+                    "model": model,
+                    "max_tokens": num_tokens_request,
+                    "n": num_gen,
+                    "messages": [
+                        {"role": "user", "content": query}
+                    ],
+                }
+                if temperature is not None:
+                    create_kwargs["temperature"] = temperature
+                try:
+                    completion = openai.ChatCompletion.create(**create_kwargs)
+                except openai.error.InvalidRequestError as e:
+                    # Some Kimi models reject temperature values other than 1,
+                    # or reject an explicit temperature field entirely.
+                    if "temperature" in create_kwargs and "temperature" in str(e).lower():
+                        print("Retrying %s without temperature after: %s" % (model, e))
+                        create_kwargs.pop("temperature", None)
+                        completion = openai.ChatCompletion.create(**create_kwargs)
+                    else:
+                        raise
+
         except openai.error.APIError as e:
             #Handle API error here, e.g. retry or log
             print(f"OpenAI API returned an API Error: {e}; waiting for {wait_time} seconds")
@@ -164,7 +191,13 @@ def run_chatgpt(query, num_gen=1, num_tokens_request=1000,
             return outputs[0]
     else:
         # print(completion.choices[0].message.content)
-        return completion.choices[0].message.content
+        text = message_text(completion.choices[0].message)
+        if not text:
+            print(
+                "Empty chat content from %s; reasoning models may have spent "
+                "max_tokens on reasoning_content. Raise --max-tokens." % model
+            )
+        return text
     
 
 def run_chatgpt_with_examples(query, examples, input, num_gen=1, num_tokens_request=1000, use_16k=False, wait_time = 1, temperature=1.0):
